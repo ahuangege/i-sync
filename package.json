@@ -1,5 +1,31 @@
 {
-  "dependencies": {
-    "@types/node": "^18.13.0"
-  }
+	"name": "sync-util",
+	"version": "1.0.0",
+	"description": "sync data to db by interval",
+	"deprecated": false,
+	"main": "dist/index.js",
+	"types": "src/index.ts",
+	"author": {
+		"name": "ahuang",
+		"email": "1124831983@qq.com"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ahuangege/sync-util.git"
+	},
+	"bundleDependencies": false,
+	"dependencies": {},
+	"devDependencies": {
+		"@types/node": "^18.13.0"
+	},
+	"scripts": {
+		"test": "echo \"Error: no test   specified\" && exit 1"
+	},
+	"keywords": [
+		"sync",
+		"mysql",
+		"db",
+		"cron"
+	],
+	"license": "MIT"
 }

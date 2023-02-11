@@ -1,12 +1,17 @@
 
-export class ISync<T extends { [file: string]: { [method: string]: any } }> {
+export class SyncUtil<T extends { [file: string]: { [method: string]: any } }> {
 
     private handler: T;
-    private dataDic: { [file: string]: { [method: string]: { [uid: string]: any[] } } } = {};
     private syncCount: number;
     private logger: { error: (reason: any) => void };
+
+    private dataDic: { [file: string]: { [method: string]: { [uid: string]: any[] } } } = {};
+
     sync: T;
-    private count = 0;
+
+    private isSaving = false;
+    private savePromiseArr: Function[] = [];
+    private untilAll: boolean = false;
 
     constructor(opts: I_initOptions<T>) {
         this.handler = opts.handler;
@@ -14,7 +19,7 @@ export class ISync<T extends { [file: string]: { [method: string]: any } }> {
         this.logger = opts.logger || console;
 
         let interval = opts.syncInterval || 5 * 60 * 1000;
-        setInterval(this.save.bind(this), interval);
+        setInterval(() => { this.save(false) }, interval);
 
 
         let self = this;
@@ -54,7 +59,9 @@ export class ISync<T extends { [file: string]: { [method: string]: any } }> {
         return func;
     }
 
-
+    /**
+     * 保存单个uid的单个记录
+     */
     async saveFileMethodUid(file: keyof T, method: keyof T[keyof T], uid: number | string) {
         let dataDic = this.dataDic as any;
         if (!dataDic[file]) {
@@ -75,7 +82,11 @@ export class ISync<T extends { [file: string]: { [method: string]: any } }> {
             });
     }
 
+    /**
+     * 保存单个uid的所有记录
+     */
     async saveUid(uid: number | string) {
+        let promisArr: Promise<void>[] = [];
         for (let file in this.dataDic) {
             for (let method in this.dataDic[file]) {
                 let data = this.dataDic[file][method][uid];
@@ -84,44 +95,87 @@ export class ISync<T extends { [file: string]: { [method: string]: any } }> {
                 }
                 delete this.dataDic[file][method][uid];
 
-                await this.saveFunc(file, method, data)
+                promisArr.push(this.saveFunc(file, method, data)
                     .catch((reason) => {
                         this.logger.error(reason);
-                    });
+                    })
+                );
             }
         }
+        await Promise.all(promisArr);
     }
 
+    /**
+     * 保存所有（一般在服务器关闭时主动调用）
+     */
+    async saveAll() {
 
-    saveAll() {
-        this.save();
+        this.save(true);
+
+        let promise = new Promise((resolve) => {
+            this.savePromiseArr.push(resolve);
+        });
+        return promise;
     }
 
-    isDone() {
-        if (this.count > 0) {
-            return false;
+    private async save(untilAll: boolean) {
+        if (!this.untilAll) {
+            this.untilAll = untilAll;
         }
-        for (let file in this.dataDic) {
-            for (let method in this.dataDic[file]) {
-                return false;
-            }
+        if (this.isSaving) {
+            return;
         }
-        return true;
-    }
+        this.isSaving = true;
 
-    private save() {
         let dataDic = this.dataDic;
         this.dataDic = {};
 
-        for (let file in this.dataDic) {
-            for (let method in this.dataDic[file]) {
-                let obj = this.dataDic[file][method];
-                for (let x in obj) {
+        let promisArr: Promise<void>[] = [];
+        for (let file in dataDic) {
+            for (let method in dataDic[file]) {
+                let obj = dataDic[file][method];
+                for (let uid in obj) {
+
+                    promisArr.push(this.saveFunc(file, method, obj[uid])
+                        .catch((reason) => {
+                            this.logger.error(reason);
+                        })
+                    );
+
+                    if (promisArr.length === this.syncCount) {
+                        await Promise.all(promisArr);
+                        promisArr = [];
+                    }
 
                 }
             }
         }
 
+        await Promise.all(promisArr);
+        this.isSaving = false;
+
+        if (this.untilAll && !this.isEmpty(this.dataDic)) {
+            this.save(true);
+        } else {
+            this.untilAll = false;
+
+            for (let one of this.savePromiseArr) {
+                process.nextTick(one);
+            }
+            this.savePromiseArr = [];
+        }
+
+    }
+
+    private isEmpty(dataDic: { [file: string]: { [method: string]: { [uid: string]: any[] } } }) {
+        for (let file in dataDic) {
+            for (let method in dataDic[file]) {
+                for (let uid in dataDic[file][method]) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private async saveFunc(file: string, method: string, args: any[]) {
@@ -131,38 +185,22 @@ export class ISync<T extends { [file: string]: { [method: string]: any } }> {
 }
 
 interface I_initOptions<T> {
-    /** 同步函数 */
+    /**
+     * 同步函数
+     */
     handler: T,
-    /** 同步间隔 ms，默认5分钟 */
+    /** 
+     * 同步间隔 ms，默认5分钟
+     */
     syncInterval?: number,
-    /** 单次同步数量（注：为防止瞬间同步量过大。） */
+    /** 
+     * 单次同步中的单批数量，默认 +Infinity
+     */
     syncCount?: number,
-
+    /** 
+     * 异常日志输出
+     */
     logger?: {
         error: (reason: any) => void
     }
 }
-
-
-class Countdown {
-    private count: number;
-    private callback: Function;
-    constructor(count: number, callback: Function) {
-        this.count = count;
-        this.callback = callback;
-        if (count <= 0) {
-            process.nextTick(this.callback);
-        }
-    }
-
-    down() {
-        this.count--;
-        if (this.count === 0) {
-            process.nextTick(this.callback);
-        }
-    }
-}
-
-function createCountdown(count: number, callback: Function): Countdown {
-    return new Countdown(count, callback);
-};
